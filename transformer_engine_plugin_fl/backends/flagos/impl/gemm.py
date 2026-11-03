@@ -77,19 +77,20 @@ def generic_gemm_fl(
 
     s = -1
     b = -1
-    orig_A_shape = A.shape
-    orig_B_shape = B.shape
-    shape_a_changed = False
     shape_b_changed = False
 
     if A.ndim == 3:
-        A = A.view(-1, A.shape[-1])
-        shape_a_changed = True
+        A = A.reshape(-1, A.shape[-1])
 
     if B.ndim == 3:
         s, b, _ = B.shape
-        B = B.view(-1, B.shape[-1])
-        shape_b_changed = True
+        B = B.reshape(-1, B.shape[-1])
+        # A non-transposed B contributes its leading dimensions to the output. A
+        # transposed B contracts over them instead, so the flattened shape must
+        # not be restored (the layout used by weight-gradient GEMMs). Restoring
+        # it there silently reshapes the result: the element count happens to
+        # match, so `view` succeeds and the error only surfaces downstream.
+        shape_b_changed = not transB
 
     A_comp = A.T if transA else A
     B_comp = B.T if transB else B
@@ -108,7 +109,7 @@ def generic_gemm_fl(
             out1 = flag_gems.mm(B_comp, A_comp)
 
     if shape_b_changed:
-        out1 = out1.view(s, b, -1)
+        out1 = out1.reshape(s, b, -1)
 
     torch_out_dtype = _convert_dtype(output_dtype)
     if torch_out_dtype is not None and out1.dtype != torch_out_dtype:
