@@ -2155,12 +2155,9 @@ class EnflameBackend(TEFLBackendBase):
         chunk_size: int,
         noop_flag: torch.Tensor,
         tensor_lists: List[List[torch.Tensor]],
-        block_len: int,
     ) -> None:
         tex = self._get_tex()
-        return tex.multi_tensor_compute_scale_inv_e8m0(
-            chunk_size, noop_flag, tensor_lists, block_len
-        )
+        return tex.multi_tensor_compute_scale_inv_e8m0(chunk_size, noop_flag, tensor_lists)
 
     def bulk_overlap_ag_with_external_gemm(
         self,

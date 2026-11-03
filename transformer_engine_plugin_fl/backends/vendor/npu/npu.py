@@ -562,7 +562,6 @@ class NPUBackend(TEFLBackendBase):
         chunk_size: int,
         noop_flag: torch.Tensor,
         tensor_lists: List[List[torch.Tensor]],
-        block_len: int,
     ):
         """Compute scale_inv in e8m0 format for MXFP8."""
         opt = _get_tenpu_optimizers()

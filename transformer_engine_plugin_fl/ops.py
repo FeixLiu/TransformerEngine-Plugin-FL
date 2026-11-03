@@ -2184,7 +2184,6 @@ class TEFLBackendBase(ABC):
         chunk_size: int,
         noop_flag: torch.Tensor,
         tensor_lists: List[List[torch.Tensor]],
-        block_len: int,
     ) -> None:
         raise NotImplementedError
 

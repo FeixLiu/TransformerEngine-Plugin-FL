@@ -381,14 +381,12 @@ class KunLunXinBackend(TEFLBackendBase):
         chunk_size: int,
         noop_flag: torch.Tensor,
         tensor_lists: List[List[torch.Tensor]],
-        block_len: int,
     ) -> None:
         tex = self._get_tex()
         return tex.multi_tensor_compute_scale_inv_e8m0(
             chunk_size,
             noop_flag,
             tensor_lists,
-            block_len,
         )
 
     def generic_gemm(

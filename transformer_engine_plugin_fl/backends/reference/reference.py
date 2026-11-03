@@ -727,13 +727,11 @@ class ReferenceBackend(TEFLBackendBase):
         chunk_size: int,
         noop_flag: torch.Tensor,
         tensor_lists: List[List[torch.Tensor]],
-        block_len: int,
     ) -> None:
         return multi_tensor_compute_scale_inv_e8m0_torch(
             chunk_size,
             noop_flag,
             tensor_lists,
-            block_len,
         )
 
     def convert_thd_to_bshd(
