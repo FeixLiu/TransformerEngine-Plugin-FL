@@ -11,7 +11,7 @@ import importlib
 # Vendors shipping Python-side patches. Each module exposes `apply_patch()`,
 # which must decide for itself whether its hardware is present -- only one of
 # these is ever active on a given machine.
-PATCHED_VENDORS = ("musa", "npu", "tsingmicro")
+PATCHED_VENDORS = ("biren", "musa", "npu", "tsingmicro")
 
 
 def apply_patches() -> None:

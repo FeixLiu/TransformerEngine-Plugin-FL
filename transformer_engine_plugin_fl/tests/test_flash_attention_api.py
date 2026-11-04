@@ -41,6 +41,7 @@ TE_MAIN_GETATTR_NAMES = ["flash_attention", "get_attention_backend"]
 FA_IMPLEMENTATIONS = [
     ("reference.flash_attention", "FlashAttentionTorch"),
     ("flagos.attention.dot_product_attention.backends", "FlashAttentionFL"),
+    ("vendor.biren.flash_attention", "FlashAttentionBiren"),
     ("vendor.cuda.flash_attention", "FlashAttentionCUDA"),
     ("vendor.enflame.flash_attention", "FlashAttentionENFLAME"),
     ("vendor.hygon.flash_attention", "FlashAttentionHYGON"),

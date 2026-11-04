@@ -23,6 +23,7 @@ from transformer_engine_plugin_fl.backends.vendor.op_names import ALL_OPS, OPTIO
 # Backends expected to implement the full op surface: they forward every op to a
 # vendor extension built from the same source as upstream.
 FULL_SURFACE_BACKENDS = [
+    ("vendor.biren.biren", "BirenBackend"),
     ("vendor.cuda.cuda", "CUDABackend"),
     ("vendor.enflame.enflame", "EnflameBackend"),
     ("vendor.hygon.hygon", "HygonBackend"),
@@ -56,7 +57,9 @@ def _signature(cls, name):
     and cannot break a call, whereas a renamed or reordered parameter does.
     """
     params = inspect.signature(getattr(cls, name)).parameters
-    return tuple((p.name, p.kind, p.default is not inspect.Parameter.empty) for p in params.values())
+    return tuple(
+        (p.name, p.kind, p.default is not inspect.Parameter.empty) for p in params.values()
+    )
 
 
 def _base_ops():

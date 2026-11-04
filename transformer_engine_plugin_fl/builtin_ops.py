@@ -19,6 +19,7 @@ from .registry import OpRegistry
 # is absent raises on import or reports itself unavailable; that is the normal
 # case on any given machine, so the failure is not surfaced.
 VENDOR_BACKENDS = (
+    "biren",
     "cuda",
     "enflame",
     "hygon",
@@ -53,9 +54,7 @@ def register_builtins(registry: OpRegistry) -> None:
 
     for vendor in VENDOR_BACKENDS:
         try:
-            module = importlib.import_module(
-                f".backends.vendor.{vendor}.register_ops", __package__
-            )
+            module = importlib.import_module(f".backends.vendor.{vendor}.register_ops", __package__)
             module.register_builtins(registry)
         except Exception:
             # The vendor's hardware or extension is not present here.

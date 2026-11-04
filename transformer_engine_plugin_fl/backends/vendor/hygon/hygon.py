@@ -7,6 +7,7 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from ....ops import *
+from ..compat import vendor_te_compat
 
 
 def _load_hygon_libs():

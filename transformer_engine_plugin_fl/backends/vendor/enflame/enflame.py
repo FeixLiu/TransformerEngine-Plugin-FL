@@ -16,6 +16,7 @@ import torch
 
 
 from ....ops import *
+from ..compat import vendor_te_compat
 
 
 _enflame_libs_loaded = False
