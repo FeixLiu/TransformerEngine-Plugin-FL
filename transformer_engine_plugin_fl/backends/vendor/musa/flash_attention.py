@@ -2,20 +2,34 @@
 #
 # See LICENSE for license information.
 
+# Annotations are kept lazy: this module names ``torch.musa.Stream``, which does
+# not resolve on non-MUSA hardware, and registration imports every backend to ask
+# whether it is available.
+from __future__ import annotations
+
 from contextlib import nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from transformer_engine_plugin_fl.ops import FlashAttentionBase
+from transformer_engine_plugin_fl.ops import (
+    FlashAttentionBase,
+    resolve_load_balancing_strategy,
+)
 
 
 class FlashAttentionMUSA(FlashAttentionBase):
+    """Forwards to musa's own FlashAttention implementation.
+
+    ``forward`` mirrors TE main's ``FlashAttention.forward`` exactly and passes
+    every argument straight through, so this class adds no behaviour of its own.
+    """
+
     def __init__(
         self,
         softmax_scale: float,
         attention_dropout: float = 0.0,
-        attention_dropout_ctx: Optional[Callable] = None,
+        attention_dropout_ctx: Optional[Callable] = nullcontext,
         attention_type: str = "self",
         layer_number: Optional[int] = None,
         deterministic: bool = False,
@@ -66,14 +80,15 @@ class FlashAttentionMUSA(FlashAttentionBase):
             )
         except Exception as e:
             raise RuntimeError(
-                f"Failed to initialize musa FlashAttention: {e}. Init params: {self._init_params}"
+                f"Failed to initialize musa FlashAttention: {e}. Init params:"
+                f" {self._init_params}"
             )
 
     @property
     def backend_name(self) -> str:
         return "musa"
 
-    def _forward_impl(
+    def forward(
         self,
         query_layer: torch.Tensor,
         key_layer: torch.Tensor,
@@ -86,20 +101,24 @@ class FlashAttentionMUSA(FlashAttentionBase):
         max_seqlen_kv: Optional[int] = None,
         attn_mask_type: str = "causal",
         window_size: Optional[Tuple[int, int]] = None,
+        softcap: float = 0.0,
         alibi_slopes: Optional[torch.Tensor] = None,
         cp_group: Optional[Any] = None,
-        cp_global_ranks: Optional[List[int]] = None,
-        cp_stream: Optional[torch.musa.Stream] = None,
+        cp_global_ranks: List[int] = None,
+        cp_stream: torch.musa.Stream = None,
         cp_comm_type: str = "p2p",
         fp8: bool = False,
         fp8_meta: Optional[Dict[str, Any]] = None,
-        quantizers: Optional[Any] = None,
+        quantizers=None,
+        pad_between_seqs: Optional[bool] = False,
         inference_params: Optional[Any] = None,
         flash_attention_backend: Optional[Any] = None,
         fp8_output: bool = False,
         num_splits: Optional[int] = 1,
+        cu_seqlens_q_padded: Optional[torch.Tensor] = None,
+        cu_seqlens_kv_padded: Optional[torch.Tensor] = None,
+        load_balancing_strategy=None,
     ) -> torch.Tensor:
-        # Ensure musa flash attention is initialized
         self._ensure_musa_flash_attn()
 
         return self._musa_flash_attn(
@@ -114,6 +133,7 @@ class FlashAttentionMUSA(FlashAttentionBase):
             max_seqlen_kv=max_seqlen_kv,
             attn_mask_type=attn_mask_type,
             window_size=window_size,
+            softcap=softcap,
             alibi_slopes=alibi_slopes,
             cp_group=cp_group,
             cp_global_ranks=cp_global_ranks,
@@ -122,8 +142,12 @@ class FlashAttentionMUSA(FlashAttentionBase):
             fp8=fp8,
             fp8_meta=fp8_meta,
             quantizers=quantizers,
+            pad_between_seqs=pad_between_seqs,
             inference_params=inference_params,
             flash_attention_backend=flash_attention_backend,
             fp8_output=fp8_output,
             num_splits=num_splits,
+            cu_seqlens_q_padded=cu_seqlens_q_padded,
+            cu_seqlens_kv_padded=cu_seqlens_kv_padded,
+            load_balancing_strategy=resolve_load_balancing_strategy(load_balancing_strategy),
         )

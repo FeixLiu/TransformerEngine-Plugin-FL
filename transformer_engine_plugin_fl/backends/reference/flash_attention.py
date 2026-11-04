@@ -9,7 +9,10 @@ import torch
 import torch.nn.functional as F
 import torch.distributed as dist
 
-from transformer_engine_plugin_fl.ops import FlashAttentionBase
+from transformer_engine_plugin_fl.ops import (
+    FlashAttentionBase,
+    is_default_load_balancing_strategy,
+)
 from transformer_engine_plugin_fl.backends.fa_utils import (
     all_gather_along_seq,
     reduce_scatter_along_seq,
@@ -24,7 +27,7 @@ class FlashAttentionTorch(FlashAttentionBase):
         self,
         softmax_scale: float,
         attention_dropout: float = 0.0,
-        attention_dropout_ctx: Optional[Callable] = None,
+        attention_dropout_ctx: Optional[Callable] = nullcontext,
         attention_type: str = "self",
         layer_number: Optional[int] = None,
         deterministic: bool = False,
@@ -199,7 +202,7 @@ class FlashAttentionTorch(FlashAttentionBase):
 
         return packed_tensor
 
-    def _forward_impl(
+    def forward(
         self,
         query_layer: torch.Tensor,
         key_layer: torch.Tensor,
@@ -212,14 +215,15 @@ class FlashAttentionTorch(FlashAttentionBase):
         max_seqlen_kv: Optional[int] = None,
         attn_mask_type: str = "causal",
         window_size: Optional[Tuple[int, int]] = None,
+        softcap: float = 0.0,
         alibi_slopes: Optional[torch.Tensor] = None,
         cp_group: Optional[Any] = None,
-        cp_global_ranks: Optional[List[int]] = None,
-        cp_stream: Optional[torch.cuda.Stream] = None,
+        cp_global_ranks: List[int] = None,
+        cp_stream: torch.cuda.Stream = None,
         cp_comm_type: str = "p2p",
         fp8: bool = False,
         fp8_meta: Optional[Dict[str, Any]] = None,
-        quantizers: Optional[Any] = None,
+        quantizers=None,
         pad_between_seqs: Optional[bool] = False,
         inference_params: Optional[Any] = None,
         flash_attention_backend: Optional[Any] = None,
@@ -227,6 +231,7 @@ class FlashAttentionTorch(FlashAttentionBase):
         num_splits: Optional[int] = 1,
         cu_seqlens_q_padded: Optional[torch.Tensor] = None,
         cu_seqlens_kv_padded: Optional[torch.Tensor] = None,
+        load_balancing_strategy=None,
     ) -> torch.Tensor:
         """Flash Attention implementation using PyTorch's scaled_dot_product_attention.
 
@@ -238,8 +243,21 @@ class FlashAttentionTorch(FlashAttentionBase):
         if alibi_slopes is not None:
             raise NotImplementedError("ALiBi slopes are not supported in PyTorch SDPA backend")
 
+        # torch.nn.functional.scaled_dot_product_attention exposes no logit
+        # soft-capping, and emulating it would mean giving up the fused kernel.
+        if softcap != 0.0:
+            raise NotImplementedError("softcap is not supported in PyTorch SDPA backend")
+
         query_original_shape = query_layer.shape
         cp_size, cp_rank, use_cp = get_cp_info(cp_group)
+
+        # This backend all-gathers K/V, so every rank sees the full sequence and
+        # only the default token partitioning is meaningful here.
+        if use_cp and not is_default_load_balancing_strategy(load_balancing_strategy):
+            raise NotImplementedError(
+                f"load_balancing_strategy={load_balancing_strategy} is not supported in"
+                " PyTorch SDPA backend"
+            )
 
         is_standard_4d = query_layer.dim() == 4
 

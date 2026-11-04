@@ -12,9 +12,11 @@ that NPU's FlashAttention doesn't support. This adapter:
   1. Accepts the full TE-FL parameter set
   2. Maps qkv_layout → qkv_format (sbhd/thd)
   3. Forwards only the supported parameters to NPU's FlashAttention
-  4. Silently ignores unsupported features (sliding window, CP, FP8, ALiBi)
+  4. Rejects unsupported features (sliding window, softcap, CP, ALiBi) instead of
+     ignoring them, since dropping any of them would change the result
 """
 
+from contextlib import nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -53,10 +55,13 @@ class NPUFlashAttention(FlashAttentionBase):
       - Variable-length sequences (cu_seqlens)
       - Sparse mask optimization (via NPU's get_fa_config)
 
-    Not supported (silently ignored):
+    Rejected with NotImplementedError (dropping them would change the result):
       - Sliding window attention (window_size)
+      - Logit soft-capping (softcap)
       - ALiBi slopes
       - Context Parallelism (cp_group, cp_stream, etc.)
+
+    Warned about (correct but slower than requested):
       - FP8 / quantization
       - KV cache (inference_params)
       - FA v2/v3 version selection
@@ -66,11 +71,10 @@ class NPUFlashAttention(FlashAttentionBase):
         self,
         softmax_scale: float,
         attention_dropout: float = 0.0,
-        attention_dropout_ctx: Optional[Callable] = None,
+        attention_dropout_ctx: Optional[Callable] = nullcontext,
         attention_type: str = "self",
         layer_number: Optional[int] = None,
         deterministic: bool = False,
-        **kwargs,
     ) -> None:
         super().__init__(
             softmax_scale=softmax_scale,
@@ -115,27 +119,28 @@ class NPUFlashAttention(FlashAttentionBase):
         # Covers bs3hd, bsh3d, and bshd_bshd_bshd.
         return layout.startswith("bs")
 
-    def _forward_impl(
+    def forward(
         self,
         query_layer: torch.Tensor,
         key_layer: torch.Tensor,
         value_layer: torch.Tensor,
         attention_mask: Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]] = None,
-        qkv_layout: Optional[str] = None,
+        qkv_layout: str = "sbh3d",
         cu_seqlens_q: Optional[torch.Tensor] = None,
         cu_seqlens_kv: Optional[torch.Tensor] = None,
         max_seqlen_q: Optional[int] = None,
         max_seqlen_kv: Optional[int] = None,
         attn_mask_type: str = "causal",
         window_size: Optional[Tuple[int, int]] = None,
+        softcap: float = 0.0,
         alibi_slopes: Optional[torch.Tensor] = None,
         cp_group: Optional[Any] = None,
-        cp_global_ranks: Optional[List[int]] = None,
-        cp_stream: Optional[Any] = None,
+        cp_global_ranks: List[int] = None,
+        cp_stream: torch.cuda.Stream = None,
         cp_comm_type: str = "p2p",
         fp8: bool = False,
         fp8_meta: Optional[Dict[str, Any]] = None,
-        quantizers: Optional[Any] = None,
+        quantizers=None,
         pad_between_seqs: Optional[bool] = False,
         inference_params: Optional[Any] = None,
         flash_attention_backend: Optional[Any] = None,
@@ -143,21 +148,29 @@ class NPUFlashAttention(FlashAttentionBase):
         num_splits: Optional[int] = 1,
         cu_seqlens_q_padded: Optional[torch.Tensor] = None,
         cu_seqlens_kv_padded: Optional[torch.Tensor] = None,
+        load_balancing_strategy=None,
     ) -> torch.Tensor:
-        """Forward pass — adapts TE-FL args to NPU FlashAttention interface.
+        """Forward pass — adapts TE args to NPU FlashAttention interface.
 
         Only passes: query, key, value, attention_mask, qkv_format,
                      cu_seqlens_q, cu_seqlens_kv, attn_mask_type
 
         Raises:
             NotImplementedError: For features that would produce incorrect results
-                if silently ignored (window_size, alibi_slopes, cp_group).
+                if silently ignored (window_size, softcap, alibi_slopes, cp_group).
 
         Warns:
             For features that don't affect correctness but differ from user
             expectation (fp8, inference_params).
         """
         # --- Validate: features that would silently produce wrong results ---
+        if softcap != 0.0:
+            raise NotImplementedError(
+                "NPU FlashAttention does not support logit soft-capping "
+                f"(softcap={softcap}). npu_fusion_attention has no softcap "
+                "parameter."
+            )
+
         if window_size is not None and window_size not in ((-1, -1), (-1, 0)):
             raise NotImplementedError(
                 "NPU FlashAttention does not support sliding window attention "

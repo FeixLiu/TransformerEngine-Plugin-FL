@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Type
 from enum import IntEnum
 from contextlib import nullcontext
+import functools
 import torch
 
 from .logger_manager import get_logger
@@ -182,6 +183,38 @@ class NVTERoutingMapFormat(IntEnum):
     BITMAP_U8 = 1
 
 
+def te_cp_load_balancing_strategy() -> type:
+    """TE main's ``CPLoadBalancingStrategy`` enum, imported lazily.
+
+    Not imported at module scope: this module is loaded while
+    ``transformer_engine`` is still initializing, so a top-level import of it
+    here is circular. By the time attention runs, TE is fully loaded.
+    """
+    from transformer_engine.pytorch.constants import CPLoadBalancingStrategy
+
+    return CPLoadBalancingStrategy
+
+
+def resolve_load_balancing_strategy(value: Any) -> Any:
+    """Map the plugin's ``None`` default onto TE main's own default member.
+
+    The plugin cannot spell TE main's default in a signature (see above), so it
+    defaults to ``None`` and resolves here. TE main asserts
+    ``isinstance(value, CPLoadBalancingStrategy)`` against *its* enum, so a
+    backend forwarding to native TE must pass the real member, never a copy.
+    """
+    if value is None:
+        return te_cp_load_balancing_strategy().DUAL_CHUNK_SWAP
+    return value
+
+
+def is_default_load_balancing_strategy(value: Any) -> bool:
+    """Whether ``value`` requests TE main's default token partitioning."""
+    return resolve_load_balancing_strategy(value) is (
+        te_cp_load_balancing_strategy().DUAL_CHUNK_SWAP
+    )
+
+
 ############ Class #################
 
 
@@ -254,11 +287,53 @@ class CommOverlapP2PBase:
 
 
 class FlashAttentionBase(torch.nn.Module, ABC):
+    """Base class for the plugin's FlashAttention implementations.
+
+    TE main's ``DotProductAttention`` uses a subclass of this in place of its own
+    ``FlashAttention`` class, so ``__init__`` and ``forward`` mirror
+    ``transformer_engine.pytorch.attention.dot_product_attention.backends.FlashAttention``
+    exactly. Backends implement ``forward`` with that same signature; there is no
+    argument filtering and no cross-backend fallback, so a mismatch surfaces
+    immediately instead of silently changing the computation.
+
+    ``transformer_engine_plugin_fl/tests/test_flash_attention_api.py`` compares
+    every backend against TE main and fails on any drift.
+
+    Each subclass's ``forward`` is wrapped once at class creation so the first
+    actual call logs which implementation ran; see ``__init_subclass__``.
+    """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Wrap the subclass's ``forward`` to log the first real call.
+
+        The ``get_flash_attention_class`` dispatch line only records which class
+        was *constructed*. TE main builds a FlashAttention instance for every
+        DotProductAttention layer regardless of which backend later runs, so that
+        line alone does not prove flash attention was used — selection among
+        flash/fused/unfused happens afterwards, per call. Logging here, inside
+        ``forward``, is the only place that shows it actually ran.
+        """
+        super().__init_subclass__(**kwargs)
+
+        forward = cls.__dict__.get("forward")
+        if forward is None or getattr(forward, "_tefl_logs_first_call", False):
+            return
+
+        @functools.wraps(forward)
+        def forward_with_log(self, *args, **kwargs):
+            logger.info_once(
+                f"FlashAttention running: {type(self).__name__}" f" (backend={self.backend_name})"
+            )
+            return forward(self, *args, **kwargs)
+
+        forward_with_log._tefl_logs_first_call = True
+        cls.forward = forward_with_log
+
     def __init__(
         self,
         softmax_scale: float,
         attention_dropout: float = 0.0,
-        attention_dropout_ctx: Optional[Callable] = None,
+        attention_dropout_ctx: Optional[Callable] = nullcontext,
         attention_type: str = "self",
         layer_number: Optional[int] = None,
         deterministic: bool = False,
@@ -272,44 +347,7 @@ class FlashAttentionBase(torch.nn.Module, ABC):
         self.layer_number = 1 if layer_number is None else layer_number
         self.deterministic = deterministic
 
-        # For fallback support
-        self._manager = None
-        self._init_params = None
-
     @abstractmethod
-    def _forward_impl(
-        self,
-        query_layer: torch.Tensor,
-        key_layer: torch.Tensor,
-        value_layer: torch.Tensor,
-        attention_mask: Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]] = None,
-        qkv_layout: str = "sbh3d",
-        cu_seqlens_q: Optional[torch.Tensor] = None,
-        cu_seqlens_kv: Optional[torch.Tensor] = None,
-        max_seqlen_q: Optional[int] = None,
-        max_seqlen_kv: Optional[int] = None,
-        attn_mask_type: str = "causal",
-        window_size: Optional[Tuple[int, int]] = None,
-        alibi_slopes: Optional[torch.Tensor] = None,
-        cp_group: Optional[Any] = None,
-        cp_global_ranks: Optional[List[int]] = None,
-        cp_stream: Optional[torch.cuda.Stream] = None,
-        cp_comm_type: str = "p2p",
-        fp8: bool = False,
-        fp8_meta: Optional[Dict[str, Any]] = None,
-        quantizers: Optional[Any] = None,
-        inference_params: Optional[Any] = None,
-        flash_attention_backend: Optional[Any] = None,
-        fp8_output: bool = False,
-        num_splits: Optional[int] = 1,
-    ) -> torch.Tensor:
-        """
-        Actual forward implementation - subclasses must implement this.
-
-        This method contains the backend-specific logic for flash attention.
-        """
-        raise NotImplementedError("Subclasses must implement _forward_impl()")
-
     def forward(
         self,
         query_layer: torch.Tensor,
@@ -323,116 +361,69 @@ class FlashAttentionBase(torch.nn.Module, ABC):
         max_seqlen_kv: Optional[int] = None,
         attn_mask_type: str = "causal",
         window_size: Optional[Tuple[int, int]] = None,
+        softcap: float = 0.0,
         alibi_slopes: Optional[torch.Tensor] = None,
         cp_group: Optional[Any] = None,
-        cp_global_ranks: Optional[List[int]] = None,
-        cp_stream: Optional[torch.cuda.Stream] = None,
+        cp_global_ranks: List[int] = None,
+        cp_stream: torch.cuda.Stream = None,
         cp_comm_type: str = "p2p",
         fp8: bool = False,
         fp8_meta: Optional[Dict[str, Any]] = None,
-        quantizers: Optional[Any] = None,
+        quantizers=None,
+        pad_between_seqs: Optional[bool] = False,
         inference_params: Optional[Any] = None,
         flash_attention_backend: Optional[Any] = None,
         fp8_output: bool = False,
         num_splits: Optional[int] = 1,
+        cu_seqlens_q_padded: Optional[torch.Tensor] = None,
+        cu_seqlens_kv_padded: Optional[torch.Tensor] = None,
+        load_balancing_strategy=None,
     ) -> torch.Tensor:
-        """
-        Forward pass with automatic fallback support and caching.
-        Delegates to OpManager.call_with_custom_impl for unified dispatch.
-        """
-        if self._manager is None:
-            return self._forward_impl(
-                query_layer=query_layer,
-                key_layer=key_layer,
-                value_layer=value_layer,
-                attention_mask=attention_mask,
-                qkv_layout=qkv_layout,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_kv,
-                max_seqlen_q=max_seqlen_q,
-                max_seqlen_kv=max_seqlen_kv,
-                attn_mask_type=attn_mask_type,
-                window_size=window_size,
-                alibi_slopes=alibi_slopes,
-                cp_group=cp_group,
-                cp_global_ranks=cp_global_ranks,
-                cp_stream=cp_stream,
-                cp_comm_type=cp_comm_type,
-                fp8=fp8,
-                fp8_meta=fp8_meta,
-                quantizers=quantizers,
-                inference_params=inference_params,
-                flash_attention_backend=flash_attention_backend,
-                fp8_output=fp8_output,
-                num_splits=num_splits,
-            )
+        """Flash attention forward pass. Signature mirrors TE main.
 
-        def call_impl_fn(impl_class):
-            if impl_class == self.__class__:
-                return self._forward_impl(
-                    query_layer=query_layer,
-                    key_layer=key_layer,
-                    value_layer=value_layer,
-                    attention_mask=attention_mask,
-                    qkv_layout=qkv_layout,
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_kv=cu_seqlens_kv,
-                    max_seqlen_q=max_seqlen_q,
-                    max_seqlen_kv=max_seqlen_kv,
-                    attn_mask_type=attn_mask_type,
-                    window_size=window_size,
-                    alibi_slopes=alibi_slopes,
-                    cp_group=cp_group,
-                    cp_global_ranks=cp_global_ranks,
-                    cp_stream=cp_stream,
-                    cp_comm_type=cp_comm_type,
-                    fp8=fp8,
-                    fp8_meta=fp8_meta,
-                    quantizers=quantizers,
-                    inference_params=inference_params,
-                    flash_attention_backend=flash_attention_backend,
-                    fp8_output=fp8_output,
-                    num_splits=num_splits,
-                )
-            else:
-                fallback_instance = impl_class(**self._init_params)
-                fallback_instance._manager = self._manager
-                fallback_instance._init_params = self._init_params
-                return fallback_instance._forward_impl(
-                    query_layer=query_layer,
-                    key_layer=key_layer,
-                    value_layer=value_layer,
-                    attention_mask=attention_mask,
-                    qkv_layout=qkv_layout,
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_kv=cu_seqlens_kv,
-                    max_seqlen_q=max_seqlen_q,
-                    max_seqlen_kv=max_seqlen_kv,
-                    attn_mask_type=attn_mask_type,
-                    window_size=window_size,
-                    alibi_slopes=alibi_slopes,
-                    cp_group=cp_group,
-                    cp_global_ranks=cp_global_ranks,
-                    cp_stream=cp_stream,
-                    cp_comm_type=cp_comm_type,
-                    fp8=fp8,
-                    fp8_meta=fp8_meta,
-                    quantizers=quantizers,
-                    inference_params=inference_params,
-                    flash_attention_backend=flash_attention_backend,
-                    fp8_output=fp8_output,
-                    num_splits=num_splits,
-                )
-
-        return self._manager.call_with_custom_impl(
-            op_name="get_flash_attention_class",
-            current_impl_class=self.__class__,
-            call_impl_fn=call_impl_fn,
-        )
+        ``load_balancing_strategy`` defaults to ``None`` rather than TE main's
+        ``CPLoadBalancingStrategy.DUAL_CHUNK_SWAP`` because naming that member in
+        the signature would require importing TE at module scope, which is
+        circular here. ``None`` means the same thing; use
+        ``resolve_load_balancing_strategy`` to get TE's member.
+        """
+        raise NotImplementedError("Subclasses must implement forward()")
 
     @property
     def backend_name(self) -> str:
         return self.__class__.__name__
+
+
+def make_flash_attention(
+    manager,
+    softmax_scale: float,
+    attention_dropout: float = 0.0,
+    attention_dropout_ctx: Optional[Callable] = nullcontext,
+    attention_type: str = "self",
+    layer_number: Optional[int] = None,
+    deterministic: bool = False,
+) -> "FlashAttentionBase":
+    """Instantiate the selected backend's FlashAttention class.
+
+    Shared by ``TEFLModule.flash_attention`` and the ``transformer_engine_torch``
+    stub's ``flash_attention`` attribute, which TE main reads via
+    ``getattr(tex, "flash_attention", _FlashAttentionNative)``. Keeping one
+    implementation ensures both entry points select the same backend.
+
+    The class is resolved through ``OpManager.call`` so backend selection follows
+    the usual policy and logging. Selection happens once, here; the returned
+    instance calls its own ``forward`` directly.
+    """
+    flash_attn_class = manager.call("get_flash_attention_class")
+
+    return flash_attn_class(
+        softmax_scale=softmax_scale,
+        attention_dropout=attention_dropout,
+        attention_dropout_ctx=attention_dropout_ctx,
+        attention_type=attention_type,
+        layer_number=layer_number,
+        deterministic=deterministic,
+    )
 
 
 ############ Base  ###################
@@ -2472,7 +2463,7 @@ class TEFLModule:
         self,
         softmax_scale: float,
         attention_dropout: float = 0.0,
-        attention_dropout_ctx: Optional[Callable] = None,
+        attention_dropout_ctx: Optional[Callable] = nullcontext,
         attention_type: str = "self",
         layer_number: Optional[int] = None,
         deterministic: bool = False,
@@ -2480,28 +2471,15 @@ class TEFLModule:
         """
         Get FlashAttention implementation through OpManager.
         """
-        # Get the flash attention class getter through OpManager.call
-        # This provides the same fallback support and logging as other operators
-        flash_attn_class = self._manager.call("get_flash_attention_class")
-
-        # Prepare initialization parameters
-        init_params = {
-            "softmax_scale": softmax_scale,
-            "attention_dropout": attention_dropout,
-            "attention_dropout_ctx": attention_dropout_ctx,
-            "attention_type": attention_type,
-            "layer_number": layer_number,
-            "deterministic": deterministic,
-        }
-
-        # Instantiate the FlashAttention
-        instance = flash_attn_class(**init_params)
-
-        # Set manager and init_params for fallback support
-        instance._manager = self._manager
-        instance._init_params = init_params
-
-        return instance
+        return make_flash_attention(
+            self._manager,
+            softmax_scale,
+            attention_dropout=attention_dropout,
+            attention_dropout_ctx=attention_dropout_ctx,
+            attention_type=attention_type,
+            layer_number=layer_number,
+            deterministic=deterministic,
+        )
 
     def __repr__(self) -> str:
         op_count = len(self._manager.registry.list_operators())

@@ -9,7 +9,7 @@ import warnings
 from packaging.version import Version as PkgVersion
 
 import torch
-from transformer_engine import te_device_type
+from transformer_engine.pytorch import te_device_type
 from transformer_engine.pytorch.utils import (
     get_device_compute_capability,
 )
@@ -254,7 +254,7 @@ class FlashAttentionFL(FlashAttentionBase):
         return "flagos"
 
     @no_torch_dynamo()
-    def _forward_impl(
+    def forward(
         self,
         query_layer: torch.Tensor,
         key_layer: torch.Tensor,
@@ -267,6 +267,7 @@ class FlashAttentionFL(FlashAttentionBase):
         max_seqlen_kv: Optional[int] = None,
         attn_mask_type: str = "causal",
         window_size: Optional[Tuple[int, int]] = None,
+        softcap: float = 0.0,
         alibi_slopes: Optional[torch.Tensor] = None,
         cp_group: Optional[Union[dist_group_type, List[dist_group_type]]] = None,
         cp_global_ranks: List[int] = None,
@@ -282,7 +283,13 @@ class FlashAttentionFL(FlashAttentionBase):
         num_splits: Optional[int] = 1,
         cu_seqlens_q_padded: Optional[torch.Tensor] = None,
         cu_seqlens_kv_padded: Optional[torch.Tensor] = None,
+        load_balancing_strategy=None,
     ) -> torch.Tensor:
+        # flag_gems' SDPA kernel takes no softcap argument, and emulating it
+        # would mean giving up the fused kernel.
+        if softcap != 0.0:
+            raise NotImplementedError("FLAttention does not support softcap")
+
         assert all(
             x.dtype in [torch.float16, torch.bfloat16] or isinstance(x, Float8Tensor)
             for x in [query_layer, key_layer, value_layer]

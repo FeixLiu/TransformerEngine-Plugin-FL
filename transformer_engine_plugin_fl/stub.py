@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 import types
 import logging
+from contextlib import nullcontext
 
 from .ops import (
     DType,
@@ -46,6 +47,7 @@ from .ops import (
     CommOverlapCore,
     CommOverlapP2PBase,
     TEFLBackendBase,
+    make_flash_attention,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,8 @@ def _te_main_op_names() -> list[str]:
     skip = {
         "is_available",
         "get_attention_backend",
+        # Exposed on the stub as `flash_attention` (a class factory, not an op)
+        # by _make_flash_attention_factory below.
         "get_flash_attention_class",
         "create_fp8_tensor_meta",
         "create_comm_overlap",
@@ -72,8 +76,49 @@ def _te_main_op_names() -> list[str]:
     return [
         name
         for name in vars(TEFLBackendBase)
-        if not name.startswith("_") and name not in skip and callable(getattr(TEFLBackendBase, name))
+        if not name.startswith("_")
+        and name not in skip
+        and callable(getattr(TEFLBackendBase, name))
     ]
+
+
+def _make_flash_attention_factory(manager):
+    """Create the stub's ``flash_attention`` attribute.
+
+    TE main's DotProductAttention does::
+
+        FlashAttention = getattr(tex, "flash_attention", _FlashAttentionNative)
+        self.flash_attention = FlashAttention(softmax_scale, attention_type=..., ...)
+
+    so this attribute stands in for the FlashAttention *class*: it is called with
+    ``softmax_scale`` positionally and returns a module instance. Without it the
+    getattr silently falls back to TE's native FlashAttention and the plugin's
+    attention implementation is never used.
+
+    The parameters mirror TE main's ``FlashAttention.__init__``.
+    """
+
+    def flash_attention(
+        softmax_scale,
+        attention_dropout=0.0,
+        attention_dropout_ctx=nullcontext,
+        attention_type="self",
+        layer_number=None,
+        deterministic=False,
+    ):
+        return make_flash_attention(
+            manager,
+            softmax_scale,
+            attention_dropout=attention_dropout,
+            attention_dropout_ctx=attention_dropout_ctx,
+            attention_type=attention_type,
+            layer_number=layer_number,
+            deterministic=deterministic,
+        )
+
+    flash_attention.__name__ = "flash_attention"
+    flash_attention.__qualname__ = "transformer_engine_torch.flash_attention"
+    return flash_attention
 
 
 def _make_op_dispatcher(op_name: str):
@@ -134,6 +179,10 @@ def install_stub(manager) -> None:
     for op_name in manager.registry.list_operators():
         setattr(stub, op_name, _make_op_dispatcher(op_name))
 
+    # FlashAttention class factory. Set after the op loop so it is not shadowed
+    # by a plain dispatcher for the same name.
+    stub.flash_attention = _make_flash_attention_factory(manager)
+
     # Ensure all TE main ops have dispatchers even if no backend registered them,
     # so `from transformer_engine_torch import <op>` succeeds at import time.
     # Derived from TEFLBackendBase rather than a second hand-kept list: that class
@@ -144,7 +193,9 @@ def install_stub(manager) -> None:
 
     # Register grouped_mlp_experimental submodule
     gme = types.ModuleType("transformer_engine_torch.grouped_mlp_experimental")
-    gme.__doc__ = "Experimental helpers for the fused grouped MLP (unstable, may change or disappear)."
+    gme.__doc__ = (
+        "Experimental helpers for the fused grouped MLP (unstable, may change or disappear)."
+    )
     gme.__package__ = module_name
     gme.swizzle_scales_and_pack_ptrs_for_discrete_weights = _make_op_dispatcher(
         "swizzle_scales_and_pack_ptrs_for_discrete_weights"
@@ -153,4 +204,6 @@ def install_stub(manager) -> None:
     sys.modules["transformer_engine_torch.grouped_mlp_experimental"] = gme
 
     sys.modules[module_name] = stub
-    logger.info("TE stub module installed (%d ops registered)", len(manager.registry.list_operators()))
+    logger.info(
+        "TE stub module installed (%d ops registered)", len(manager.registry.list_operators())
+    )
