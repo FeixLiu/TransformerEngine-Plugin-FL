@@ -32,8 +32,6 @@ def _load_hygon_libs():
         raise RuntimeError(f"Unsupported operating system ({system})")
 
     try:
-        if bool(int(os.environ.get("TE_FL_SKIP_HYGON", "0"))):
-            return False
         ext = _get_sys_extension()
         hygon_spec = importlib.util.find_spec("transformer_engine_hygon")
         if hygon_spec is None:

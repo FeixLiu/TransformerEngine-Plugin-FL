@@ -97,18 +97,12 @@ def _check_cuda_available() -> bool:
     if not torch.cuda.is_available():
         return False
 
-    import os
-
-    try:
-        from ...._build_config import SKIP_CUDA_BUILD
-
-        if SKIP_CUDA_BUILD:
-            print("[CUDA] Disabled: CUDA was skipped at build time")
-            return False
-    except ImportError:
-        if bool(int(os.environ.get("TE_FL_SKIP_CUDA", "0"))):
-            print("[CUDA] Disabled: TE_FL_SKIP_CUDA=1")
-            return False
+    # Same switch the interface repo uses (transformer_engine.common.plugin), so
+    # a platform that built plugin-only does not probe for the NVIDIA extension
+    # here either. Without it, availability is decided by the probe below.
+    if bool(int(os.environ.get("NVTE_PLUGIN_SKIP_CUDA", "0"))):
+        print("[CUDA] Disabled: NVTE_PLUGIN_SKIP_CUDA=1")
+        return False
 
     try:
         if not _ensure_cuda_libs():

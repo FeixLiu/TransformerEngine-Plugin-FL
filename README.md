@@ -258,17 +258,55 @@ fallback 顺序),这能覆盖接口层;数值正确性仍需在真实卡上验�
 代码读 `TE_FL_*`。`NVTE_*` 是目标命名(上游 TE 就是这个前缀,接口仓库也已在用 `NVTE_PLUGIN`),
 但 `FlagScale` 当前在写 `TE_FL_*`:
 
-- `FlagScale/flagscale/train/megatron/training/training.py` 设置 `TE_FL_PREFER`、
+- `FlagScale/flagscale/train/megatron/backend_config.py` 设置 `TE_FL_PREFER`、
   `TE_FL_PER_OP`、`TE_FL_ALLOW_VENDORS`、`TE_FL_DENY_VENDORS`
-- `FlagScale/tests/test_utils/runners/setup_training_test_env.sh` 设置 `TE_FL_SKIP_CUDA=1`
 
 单独改插件会直接破坏 FlagScale,因此**留到 `FlagScale` + `Megatron-LM-FL` + 插件联合升级时
 一次性改名**。在那之前这 8 个失败是预期的 —— 不要为了让它变绿而把测试改成 `TE_FL_*`,
 那会把错误的命名固化下来。
 
 待改名清单(`TE_FL_` → `NVTE_`):`STRICT`、`PREFER`、`PREFER_VENDOR`、`ALLOW_VENDORS`、
-`DENY_VENDORS`、`PER_OP`、`PLUGIN_MODULES`、`SKIP_CUDA`、`SKIP_HYGON`、`SKIP_METAX`。
-建议过渡期内同时接受两种前缀。
+`DENY_VENDORS`、`PER_OP`、`PLUGIN_MODULES`。建议过渡期内同时接受两种前缀。
+(`SKIP_CUDA`/`SKIP_HYGON`/`SKIP_METAX` 已在本次处理,见 §5.1。)
+
+**`FlagScale` 的 policy reset 是死代码**:`backend_config.py:52` 查的是
+`sys.modules.get("transformer_engine.plugin.core.policy")` —— 那是旧内嵌设计的路径,
+新架构下应为 `transformer_engine_plugin_fl.policy`,TE 仓里已经没有 `transformer_engine/plugin/`。
+所以设完 `TE_FL_*` 之后的 `reset_global_policy()` 永远拿不到函数,静默跳过。
+目前不出问题,是因为 `configure_backend_environment` 跑在 `validate_args`/`initialize` 阶段,
+早于任何 TE dispatch,policy 还没被 lazily 缓存。但一旦有代码在它之前触发首次 dispatch,
+环境变量就会失效且无任何提示 —— 和上面的改名一起修。
+
+### 5.1 skip-cuda 开关已收敛为 `NVTE_PLUGIN_SKIP_CUDA`
+
+原先有四套重叠的机制,现在只剩一个。已删除:
+
+| 删除项 | 原因 |
+| --- | --- |
+| `_build_config.py` 的三处 import | 该文件是**旧内嵌架构**(`transformer_engine/plugin/core/`)构建时生成的。本仓 `setup.py` 从未生成过它(`git log -S` 确认),所以三处 `try: from ..._build_config import ...` 必然 `ImportError`、永远走 except 分支,属于死代码。它还每次 import 打印一行 `Build config not found` 噪音 |
+| `TE_FL_SKIP_CUDA` | 改名为 `NVTE_PLUGIN_SKIP_CUDA`,与接口仓 `transformer_engine/common/plugin.py` 统一 |
+| `TE_FL_SKIP_HYGON` / `TE_FL_SKIP_METAX` | 不需要:`is_available()` 本来就会探测厂商扩展在不在,探测失败即跳过 |
+| `backends/vendor/__init__.py` 的 eager import 门控 | 没有实际作用:`builtin_ops.py` 直接 import 各厂商的 `register_ops`,后者无条件 `from .xxx import XxxBackend`,所以在这里少做一次 eager import 挡不住任何东西。真正的闸门是 `registration.py:53` 的 `if not backend.is_available(): return 0` |
+| `get_vendor_loading_errors()` | 它的数据源只有上面那个被删掉的 try/except 块,保留会变成恒返回 `[]` 的假 API;全仓无调用者 |
+
+`_build_config` 还藏了一个**优先级矛盾**:`vendor/__init__.py` 是环境变量优先,
+而 `cuda.py` 是构建配置优先(只在 `ImportError` 时才看环境变量)。旧设计的
+`skip_cuda_build()` 明确是环境变量优先("allows runtime override"),所以 `cuda.py`
+那个写法本身就偏离了原意 —— 一旦有人补上生成逻辑,`=0` 会在两处得到相反结果。
+删掉后这个矛盾不存在了。
+
+保留 `NVTE_PLUGIN_SKIP_CUDA` 的理由:它能在**有 CUDA 卡**的机器上强制禁用 CUDA 后端
+(测试 fallback 用),也避免在非 CUDA 平台白跑一遍 `_load_cuda_libs()` 的
+`ctypes.CDLL` 全局加载。不设它时,可用性完全由
+`torch.cuda.is_available()` + `import transformer_engine_torch_nv` 探测决定。
+
+**下游待办(本次未动)**:`FlagScale` 和 `Megatron-LM-FL` 里约 45 处 `TE_FL_SKIP_CUDA=1`
+(8 个厂商的 `.github/configs/*.yml`、`tools/install/*/env.sh`、`set_env_*.sh`,
+以及 `prepare_dependencies.yml:167` / `prepare_te_fl.yml:104` 两处 "python-only 构建必须
+`TE_FL_SKIP_CUDA=1`" 的 workflow 门控)。这些目前消费的是**旧仓
+`flagos-ai/TransformerEngine-FL`** —— 两个下游仓共 24 处引用都指向旧仓,零处引用本仓,
+而旧仓的 `common/__init__.py:21-38` `skip_cuda_build()` 只认 `TE_FL_SKIP_CUDA`。
+所以现在改名会直接打断 8 个平台的 CI,必须等下游切到新 fork 时一起改。
 
 **`TE_FL_STRICT` 语义反了(本次未修,先于本次升级存在)**:
 `policy.py` 和 `manager.py` 对同一个变量的默认值和含义不一致 ——
@@ -297,15 +335,15 @@ conda activate /share/project/lixianduo/envs/fl-train-base   # python 3.12, torc
 export NVTE_PLUGIN=transformer_engine_plugin_fl
 ```
 
-常用环境变量(当前仍是 `TE_FL_*` 前缀,见 §5):
+常用环境变量(选择策略类仍是 `TE_FL_*` 前缀,见 §5):
 
 | 变量 | 作用 |
 | --- | --- |
 | `NVTE_PLUGIN` | 设为 `transformer_engine_plugin_fl` 启用插件 |
+| `NVTE_PLUGIN_SKIP_CUDA` | `1` 跳过 CUDA:构建期不编译扩展、加载期不探测 `transformer_engine_torch_nv`。唯一的 skip-cuda 开关,接口仓与插件共用(见 §5.1) |
 | `TE_FL_PREFER` | 优先后端:`flagos` / `vendor` / `reference` |
 | `TE_FL_PER_OP` | 按 op 指定,如 `layernorm_fwd=vendor\|flagos;rmsnorm_fwd=flagos` |
 | `TE_FL_ALLOW_VENDORS` / `TE_FL_DENY_VENDORS` | 厂商白/黑名单(逗号分隔) |
 | `TE_FL_STRICT` | 本意是 `1` 关闭 fallback,**但当前实现有 bug,见 §5** |
-| `TE_FL_SKIP_CUDA` | 构建/加载时跳过 CUDA 后端 |
 
 `TE_FL_PER_OP` 的格式是 `op=后端1|后端2;op2=后端3`,用 `;` 分隔 op、`|` 分隔候选顺序。
