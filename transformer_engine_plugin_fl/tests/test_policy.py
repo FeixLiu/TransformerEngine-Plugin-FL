@@ -182,12 +182,12 @@ class TestPolicyManager(unittest.TestCase):
         reset_global_policy()
         # Clear any test environment variables
         for key in [
-            "NVTE_PREFER",
-            "NVTE_PREFER_VENDOR",
-            "NVTE_STRICT",
-            "NVTE_DENY_VENDORS",
-            "NVTE_ALLOW_VENDORS",
-            "NVTE_PER_OP",
+            "NVTE_PLUGIN_PREFER",
+            "NVTE_PLUGIN_PREFER_VENDOR",
+            "NVTE_PLUGIN_STRICT",
+            "NVTE_PLUGIN_DENY_VENDORS",
+            "NVTE_PLUGIN_ALLOW_VENDORS",
+            "NVTE_PLUGIN_PER_OP",
         ]:
             os.environ.pop(key, None)
 
@@ -260,24 +260,24 @@ class TestEnvironmentVariables(unittest.TestCase):
         reset_global_policy()
         # Clear all test env vars
         for key in [
-            "NVTE_PREFER",
-            "NVTE_PREFER_VENDOR",
-            "NVTE_STRICT",
-            "NVTE_DENY_VENDORS",
-            "NVTE_ALLOW_VENDORS",
-            "NVTE_PER_OP",
+            "NVTE_PLUGIN_PREFER",
+            "NVTE_PLUGIN_PREFER_VENDOR",
+            "NVTE_PLUGIN_STRICT",
+            "NVTE_PLUGIN_DENY_VENDORS",
+            "NVTE_PLUGIN_ALLOW_VENDORS",
+            "NVTE_PLUGIN_PER_OP",
         ]:
             os.environ.pop(key, None)
 
     def tearDown(self):
         """Clean up environment"""
         for key in [
-            "NVTE_PREFER",
-            "NVTE_PREFER_VENDOR",
-            "NVTE_STRICT",
-            "NVTE_DENY_VENDORS",
-            "NVTE_ALLOW_VENDORS",
-            "NVTE_PER_OP",
+            "NVTE_PLUGIN_PREFER",
+            "NVTE_PLUGIN_PREFER_VENDOR",
+            "NVTE_PLUGIN_STRICT",
+            "NVTE_PLUGIN_DENY_VENDORS",
+            "NVTE_PLUGIN_ALLOW_VENDORS",
+            "NVTE_PLUGIN_PER_OP",
         ]:
             os.environ.pop(key, None)
         from transformer_engine_plugin_fl.policy import reset_global_policy
@@ -285,97 +285,97 @@ class TestEnvironmentVariables(unittest.TestCase):
         reset_global_policy()
 
     def test_nvte_prefer_flagos(self):
-        """Test NVTE_PREFER=flagos"""
-        os.environ["NVTE_PREFER"] = "flagos"
+        """Test NVTE_PLUGIN_PREFER=flagos"""
+        os.environ["NVTE_PLUGIN_PREFER"] = "flagos"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
         self.assertEqual(policy.prefer, "flagos")
-        print("    [PASS] NVTE_PREFER=flagos")
+        print("    [PASS] NVTE_PLUGIN_PREFER=flagos")
 
     def test_nvte_prefer_vendor(self):
-        """Test NVTE_PREFER=vendor"""
-        os.environ["NVTE_PREFER"] = "vendor"
+        """Test NVTE_PLUGIN_PREFER=vendor"""
+        os.environ["NVTE_PLUGIN_PREFER"] = "vendor"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
         self.assertEqual(policy.prefer, "vendor")
-        print("    [PASS] NVTE_PREFER=vendor")
+        print("    [PASS] NVTE_PLUGIN_PREFER=vendor")
 
     def test_nvte_prefer_reference(self):
-        """Test NVTE_PREFER=reference"""
-        os.environ["NVTE_PREFER"] = "reference"
+        """Test NVTE_PLUGIN_PREFER=reference"""
+        os.environ["NVTE_PLUGIN_PREFER"] = "reference"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
         self.assertEqual(policy.prefer, "reference")
-        print("    [PASS] NVTE_PREFER=reference")
+        print("    [PASS] NVTE_PLUGIN_PREFER=reference")
 
     def test_nvte_prefer_vendor_legacy(self):
-        """Test legacy NVTE_PREFER_VENDOR=1"""
-        os.environ["NVTE_PREFER_VENDOR"] = "1"
+        """Test legacy NVTE_PLUGIN_PREFER_VENDOR=1"""
+        os.environ["NVTE_PLUGIN_PREFER_VENDOR"] = "1"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
         self.assertEqual(policy.prefer, "vendor")
-        print("    [PASS] NVTE_PREFER_VENDOR=1 (legacy)")
+        print("    [PASS] NVTE_PLUGIN_PREFER_VENDOR=1 (legacy)")
 
     def test_nvte_prefer_overrides_legacy(self):
-        """Test that NVTE_PREFER takes precedence over NVTE_PREFER_VENDOR"""
-        os.environ["NVTE_PREFER"] = "reference"
-        os.environ["NVTE_PREFER_VENDOR"] = "1"
+        """Test that NVTE_PLUGIN_PREFER takes precedence over NVTE_PLUGIN_PREFER_VENDOR"""
+        os.environ["NVTE_PLUGIN_PREFER"] = "reference"
+        os.environ["NVTE_PLUGIN_PREFER_VENDOR"] = "1"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
-        self.assertEqual(policy.prefer, "reference")  # NVTE_PREFER wins
-        print("    [PASS] NVTE_PREFER overrides NVTE_PREFER_VENDOR")
+        self.assertEqual(policy.prefer, "reference")  # NVTE_PLUGIN_PREFER wins
+        print("    [PASS] NVTE_PLUGIN_PREFER overrides NVTE_PLUGIN_PREFER_VENDOR")
 
     def test_nvte_strict(self):
-        """Test NVTE_STRICT=1"""
-        os.environ["NVTE_STRICT"] = "1"
+        """Test NVTE_PLUGIN_STRICT=1"""
+        os.environ["NVTE_PLUGIN_STRICT"] = "1"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
         self.assertTrue(policy.strict)
-        print("    [PASS] NVTE_STRICT=1")
+        print("    [PASS] NVTE_PLUGIN_STRICT=1")
 
     def test_nvte_deny_vendors(self):
-        """Test NVTE_DENY_VENDORS parsing"""
-        os.environ["NVTE_DENY_VENDORS"] = "rocm,dcu,intel"
+        """Test NVTE_PLUGIN_DENY_VENDORS parsing"""
+        os.environ["NVTE_PLUGIN_DENY_VENDORS"] = "rocm,dcu,intel"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
         self.assertEqual(policy.deny_vendors, frozenset({"rocm", "dcu", "intel"}))
-        print("    [PASS] NVTE_DENY_VENDORS parsing")
+        print("    [PASS] NVTE_PLUGIN_DENY_VENDORS parsing")
 
     def test_nvte_allow_vendors(self):
-        """Test NVTE_ALLOW_VENDORS parsing"""
-        os.environ["NVTE_ALLOW_VENDORS"] = "cuda,rocm"
+        """Test NVTE_PLUGIN_ALLOW_VENDORS parsing"""
+        os.environ["NVTE_PLUGIN_ALLOW_VENDORS"] = "cuda,rocm"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
         policy = policy_from_env()
 
         self.assertEqual(policy.allow_vendors, frozenset({"cuda", "rocm"}))
-        print("    [PASS] NVTE_ALLOW_VENDORS parsing")
+        print("    [PASS] NVTE_PLUGIN_ALLOW_VENDORS parsing")
 
     def test_nvte_per_op(self):
-        """Test NVTE_PER_OP parsing"""
-        os.environ["NVTE_PER_OP"] = "layernorm_fwd=vendor|flagos;rmsnorm_fwd=flagos|reference"
+        """Test NVTE_PLUGIN_PER_OP parsing"""
+        os.environ["NVTE_PLUGIN_PER_OP"] = "layernorm_fwd=vendor|flagos;rmsnorm_fwd=flagos|reference"
 
         from transformer_engine_plugin_fl.policy import policy_from_env
 
@@ -383,7 +383,7 @@ class TestEnvironmentVariables(unittest.TestCase):
 
         self.assertEqual(policy.get_per_op_order("layernorm_fwd"), ["vendor", "flagos"])
         self.assertEqual(policy.get_per_op_order("rmsnorm_fwd"), ["flagos", "reference"])
-        print("    [PASS] NVTE_PER_OP parsing")
+        print("    [PASS] NVTE_PLUGIN_PER_OP parsing")
 
 
 class TestContextManagers(unittest.TestCase):

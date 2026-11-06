@@ -368,7 +368,7 @@ class OpManager:
         """
         Resolve and call an operator implementation with optional fallback support.
 
-        Strict policy (``TE_FL_STRICT=1``) disables fallback: the selected
+        Strict policy (``NVTE_PLUGIN_STRICT=1``) disables fallback: the selected
         implementation's exception propagates instead of the next candidate
         being tried. Fallback is taken from the policy rather than read from the
         environment here, so that it stays consistent with ``policy.strict`` and

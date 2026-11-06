@@ -254,28 +254,17 @@ fallback 顺序),这能覆盖接口层;数值正确性仍需在真实卡上验�
 
 ## 5. 已知问题
 
-**8 个 `test_policy.py` 失败(先于本次升级存在)**:测试用 `NVTE_*` 环境变量,
-代码读 `TE_FL_*`。`NVTE_*` 是目标命名(上游 TE 就是这个前缀,接口仓库也已在用 `NVTE_PLUGIN`),
-但 `FlagScale` 当前在写 `TE_FL_*`:
-
-- `FlagScale/flagscale/train/megatron/backend_config.py` 设置 `TE_FL_PREFER`、
-  `TE_FL_PER_OP`、`TE_FL_ALLOW_VENDORS`、`TE_FL_DENY_VENDORS`
-
-单独改插件会直接破坏 FlagScale,因此**留到 `FlagScale` + `Megatron-LM-FL` + 插件联合升级时
-一次性改名**。在那之前这 8 个失败是预期的 —— 不要为了让它变绿而把测试改成 `TE_FL_*`,
-那会把错误的命名固化下来。
-
-待改名清单(`TE_FL_` → `NVTE_`):`STRICT`、`PREFER`、`PREFER_VENDOR`、`ALLOW_VENDORS`、
-`DENY_VENDORS`、`PER_OP`、`PLUGIN_MODULES`。建议过渡期内同时接受两种前缀。
-(`SKIP_CUDA`/`SKIP_HYGON`/`SKIP_METAX` 已在本次处理,见 §5.1。)
+**环境变量已全部统一为 `NVTE_PLUGIN_*` 前缀(见 §5.3)。** 原先 8 个
+`test_policy.py` 失败(测试写 `NVTE_*`、代码读 `TE_FL_*`)随改名一并消失,
+现在测试与代码一致,全部 42 项通过。
 
 **`FlagScale` 的 policy reset 是死代码**:`backend_config.py:52` 查的是
 `sys.modules.get("transformer_engine.plugin.core.policy")` —— 那是旧内嵌设计的路径,
 新架构下应为 `transformer_engine_plugin_fl.policy`,TE 仓里已经没有 `transformer_engine/plugin/`。
-所以设完 `TE_FL_*` 之后的 `reset_global_policy()` 永远拿不到函数,静默跳过。
+所以设完环境变量之后的 `reset_global_policy()` 永远拿不到函数,静默跳过。
 目前不出问题,是因为 `configure_backend_environment` 跑在 `validate_args`/`initialize` 阶段,
 早于任何 TE dispatch,policy 还没被 lazily 缓存。但一旦有代码在它之前触发首次 dispatch,
-环境变量就会失效且无任何提示 —— 和上面的改名一起修。
+环境变量就会失效且无任何提示 —— 和 §5.3 的下游改名一起修。
 
 ### 5.1 skip-cuda 开关已收敛为 `NVTE_PLUGIN_SKIP_CUDA`
 
@@ -347,6 +336,59 @@ TE_FL_STRICT=1      -> strict=True  -> 主实现的异常直接抛出,不回退
 **对下游的影响**:`FlagScale` / `Megatron-LM-FL` 当前没有任何地方设置 `TE_FL_STRICT`
 (已 grep 确认),所以这次修复不改变现有作业的行为。
 
+### 5.3 环境变量统一为 `NVTE_PLUGIN_*`
+
+`TE_FL_*` / `TEFL_*` 前缀已全部废弃。**不保留旧名兼容** —— 旧名现在完全惰性,
+设置了不报错也不生效。改名清单(9 个):
+
+| 旧名 | 新名 | 读取点 |
+| --- | --- | --- |
+| `TE_FL_PREFER` | `NVTE_PLUGIN_PREFER` | `policy.py:233` |
+| `TE_FL_PREFER_VENDOR` | `NVTE_PLUGIN_PREFER_VENDOR` | `policy.py:245` |
+| `TE_FL_PER_OP` | `NVTE_PLUGIN_PER_OP` | `policy.py:266` |
+| `TE_FL_ALLOW_VENDORS` | `NVTE_PLUGIN_ALLOW_VENDORS` | `policy.py:263` |
+| `TE_FL_DENY_VENDORS` | `NVTE_PLUGIN_DENY_VENDORS` | `policy.py:260` |
+| `TE_FL_STRICT` | `NVTE_PLUGIN_STRICT` | `policy.py:258` |
+| `TE_FL_PLUGIN_MODULES` | `NVTE_PLUGIN_MODULES` | `discovery.py:16`(顺带去掉重复的 PLUGIN) |
+| `TEFL_LOG_LEVEL` | `NVTE_PLUGIN_LOG_LEVEL` | `logger_manager.py:90` |
+| `TE_FL_USE_SUPA` | `NVTE_PLUGIN_USE_SUPA` | `biren/biren.py:106`、`biren/patches.py:27` |
+
+同时改了三个非环境变量的标识符:
+
+- **entry point 组名** `te_fl.plugin` → `nvte.plugin`(`discovery.py:14`)
+- **第三方注册钩子** `te_fl_register` → `nvte_plugin_register`(`discovery.py:82`)。
+  它和组名是同一套第三方契约,组名已经要求对方改,所以一并改掉而不是只改一半;
+  `register` 作为备选钩子名保持不变
+- **日志前缀** `TE-FL` → `NVTE-PLUGIN`(`logger_manager.py:91`),会出现在所有运行日志里
+
+**未改(有意保留)**:
+
+| 变量 | 原因 |
+| --- | --- |
+| `TE_LIB_PATH` | `libtransformer_engine.so` 路径覆盖,**上游 TE 自己在用**(`TransformerEngine/tests/cpp/CMakeLists.txt:28`),改名会和上游 CMake 约定分叉 |
+| `TE_METAX_TE_HOME` | Metax 扩展的隔离安装前缀,属于部署路径而非插件策略;要改需与 Metax 交付脚本对齐 |
+| `NVTE_FLASH_ATTN` / `NVTE_FUSED_ATTN` / `NVTE_UNFUSED_ATTN` | 沿用上游 TE 的名字(5 个后端共 15 处),加 `_PLUGIN` 会破坏与 TE 的兼容 |
+| `CUDA_HOME` / `CUDA_PATH` / `MUSA_*` / `IX_*` | 构建部署惯例,非插件配置 |
+
+注意 `TEFLBackendBase` / `TEFLModule` 是**类名**不是环境变量,本次未动。
+
+**下游待办(本次未改,会静默失效)**:下面这些设的是旧名,新代码已经不读了。
+因为它们当前消费的是旧仓 `flagos-ai/TransformerEngine-FL`(两个下游仓共 24 处 TE 引用
+全部指向旧仓、零处引用本仓),现在改反而会打断旧仓路径,所以留到下游切新 fork 时一起改:
+
+| 变量 | 下游位置 |
+| --- | --- |
+| `TE_FL_PREFER` | **24 个文件**(FlagScale 13 / Megatron-LM-FL 11):`flagscale/train/megatron/backend_config.py:23`、`tools/install/*/env.sh`、`.github/configs/*.yml`、`.github/scripts/set_env_*.sh` |
+| `TE_FL_PER_OP` | `backend_config.py:24`、`Megatron-LM-FL/.github/configs/metax.yml:332` |
+| `TE_FL_ALLOW_VENDORS` / `TE_FL_DENY_VENDORS` | `backend_config.py:25-26` |
+| `TE_FL_SKIP_CUDA` | 约 45 处,见 §5.1 末尾 |
+
+失效表现是**静默**的:`NVTE_PLUGIN_PREFER` 没设时 policy 回到默认 `flagos` 顺序,
+不报错。所以下游切换时必须同时改名,否则后端选择会悄悄回到默认值。
+
+`backend_config.py` 里的 `_BACKEND_ENVIRONMENT_ARGUMENTS` 元组和 `startswith("TE_FL_")`
+判断也要一起改,另见 §5 记的那个 policy reset 死代码。
+
 ## 6. 环境
 
 ```bash
@@ -354,15 +396,27 @@ conda activate /share/project/lixianduo/envs/fl-train-base   # python 3.12, torc
 export NVTE_PLUGIN=transformer_engine_plugin_fl
 ```
 
-常用环境变量(选择策略类仍是 `TE_FL_*` 前缀,见 §5):
+常用环境变量(统一 `NVTE_PLUGIN_*` 前缀,`TE_FL_*` / `TEFL_*` 已废弃,见 §5.3):
 
 | 变量 | 作用 |
 | --- | --- |
 | `NVTE_PLUGIN` | 设为 `transformer_engine_plugin_fl` 启用插件 |
 | `NVTE_PLUGIN_SKIP_CUDA` | `1` 跳过 CUDA:构建期不编译扩展、加载期不探测 `transformer_engine_torch_nv`。唯一的 skip-cuda 开关,接口仓与插件共用(见 §5.1) |
-| `TE_FL_PREFER` | 优先后端:`flagos` / `vendor` / `reference` |
-| `TE_FL_PER_OP` | 按 op 指定,如 `layernorm_fwd=vendor\|flagos;rmsnorm_fwd=flagos` |
-| `TE_FL_ALLOW_VENDORS` / `TE_FL_DENY_VENDORS` | 厂商白/黑名单(逗号分隔) |
-| `TE_FL_STRICT` | `1` 禁止 fallback:主实现失败时直接抛异常,不再尝试下一候选(默认不设 = 允许回退,见 §5.2) |
+| `NVTE_PLUGIN_PREFER` | 优先后端:`flagos` / `vendor` / `reference` |
+| `NVTE_PLUGIN_PREFER_VENDOR` | legacy 布尔,`1`=vendor / `0`=flagos。优先级低于 `NVTE_PLUGIN_PREFER` |
+| `NVTE_PLUGIN_PER_OP` | 按 op 指定,如 `layernorm_fwd=vendor\|flagos;rmsnorm_fwd=flagos` |
+| `NVTE_PLUGIN_ALLOW_VENDORS` / `NVTE_PLUGIN_DENY_VENDORS` | 厂商白/黑名单(逗号分隔,**大小写敏感**) |
+| `NVTE_PLUGIN_STRICT` | `1` 禁止 fallback:主实现失败时直接抛异常,不再尝试下一候选(默认不设 = 允许回退,见 §5.2) |
+| `NVTE_PLUGIN_MODULES` | 第三方后端模块名(逗号分隔),模块需提供 `nvte_plugin_register(registry)` 或 `register(registry)` |
+| `NVTE_PLUGIN_LOG_LEVEL` | 插件日志级别,默认 `INFO` |
+| `NVTE_PLUGIN_USE_SUPA` | `0` 禁用 Biren/SUPA 后端及其 patches |
 
-`TE_FL_PER_OP` 的格式是 `op=后端1|后端2;op2=后端3`,用 `;` 分隔 op、`|` 分隔候选顺序。
+`NVTE_PLUGIN_PER_OP` 的格式是 `op=后端1|后端2;op2=后端3`,用 `;` 分隔 op、`|` 分隔候选顺序;
+候选 token 除 `flagos`/`vendor`/`reference` 外还支持 `vendor:NAME` 和 `impl:ID`。
+
+白/黑名单要用注册时的厂商名,**大小写敏感**:`CUDA`、`BIREN`、`ENFLAME`、`HYGON`、
+`METAX`、`MUSA`、`NPU`、`KUNLUNXIN` 全大写,只有 `Iluvatar` 是混合大小写。
+写错不报错,只是静默不生效。
+
+另有沿用上游 TE 的 `NVTE_FLASH_ATTN` / `NVTE_FUSED_ATTN` / `NVTE_UNFUSED_ATTN`(`0` 禁用对应
+attention 路径),以及部署路径类的 `TE_LIB_PATH` / `TE_METAX_TE_HOME`,均未改名(见 §5.3)。

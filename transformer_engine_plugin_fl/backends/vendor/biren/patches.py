@@ -24,7 +24,7 @@ _PATCH_CALLS: list[tuple[object, str, Callable[..., object]]] = [
 
 def apply_patch() -> None:
     """Apply Biren/SUPA Python-side patches (idempotent, best-effort)."""
-    if not bool(int(os.getenv("TE_FL_USE_SUPA", "1"))):
+    if not bool(int(os.getenv("NVTE_PLUGIN_USE_SUPA", "1"))):
         return
 
     # Set TE device type to "supa" so that TE's device checks match the real

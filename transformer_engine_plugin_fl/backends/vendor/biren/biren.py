@@ -103,7 +103,7 @@ def _ensure_biren_libs():
 
 
 def _check_biren_available() -> bool:
-    if not bool(int(os.getenv("TE_FL_USE_SUPA", "1"))):
+    if not bool(int(os.getenv("NVTE_PLUGIN_USE_SUPA", "1"))):
         return False
 
     try:

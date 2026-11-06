@@ -13,7 +13,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from .types import BackendImplKind
 
 
-# Valid preference values for TE_FL_PREFER
+# Valid preference values for NVTE_PLUGIN_PREFER
 PREFER_DEFAULT = "flagos"
 PREFER_VENDOR = "vendor"
 PREFER_REFERENCE = "reference"
@@ -33,7 +33,7 @@ class SelectionPolicy:
             - "reference": Prefer REFERENCE (PyTorch) implementations
         strict: If True, disallow fallback. The selected implementation's
             exception propagates instead of the next candidate being tried
-            (set by TE_FL_STRICT=1)
+            (set by NVTE_PLUGIN_STRICT=1)
         per_op_order: Per-operator custom selection order
         deny_vendors: Set of vendor names to deny
         allow_vendors: Set of vendor names to allow (whitelist)
@@ -222,27 +222,27 @@ class PolicyManager:
         return result
 
     def _policy_from_env(self) -> SelectionPolicy:
-        # Priority: TE_FL_PREFER (highest) > TE_FL_PREFER_VENDOR (legacy)
+        # Priority: NVTE_PLUGIN_PREFER (highest) > NVTE_PLUGIN_PREFER_VENDOR (legacy)
         #
-        # TE_FL_PREFER: Explicit preference by name (flagos, vendor, reference)
-        # TE_FL_PREFER_VENDOR: Legacy boolean flag (1=vendor, 0=flagos)
+        # NVTE_PLUGIN_PREFER: Explicit preference by name (flagos, vendor, reference)
+        # NVTE_PLUGIN_PREFER_VENDOR: Legacy boolean flag (1=vendor, 0=flagos)
 
         prefer_str = None
 
-        # 1. Check TE_FL_PREFER first (highest priority)
-        te_fl_prefer = os.environ.get("TE_FL_PREFER", "").strip().lower()
-        if te_fl_prefer:
-            if te_fl_prefer in VALID_PREFER_VALUES:
-                prefer_str = te_fl_prefer
+        # 1. Check NVTE_PLUGIN_PREFER first (highest priority)
+        prefer_env = os.environ.get("NVTE_PLUGIN_PREFER", "").strip().lower()
+        if prefer_env:
+            if prefer_env in VALID_PREFER_VALUES:
+                prefer_str = prefer_env
             else:
                 print(
-                    f"[WARNING] Invalid TE_FL_PREFER value: '{te_fl_prefer}'. "
+                    f"[WARNING] Invalid NVTE_PLUGIN_PREFER value: '{prefer_env}'. "
                     f"Valid values: {', '.join(sorted(VALID_PREFER_VALUES))}"
                 )
 
-        # 2. Fall back to TE_FL_PREFER_VENDOR (legacy)
+        # 2. Fall back to NVTE_PLUGIN_PREFER_VENDOR (legacy)
         if prefer_str is None:
-            prefer_vendor = os.environ.get("TE_FL_PREFER_VENDOR", "").strip()
+            prefer_vendor = os.environ.get("NVTE_PLUGIN_PREFER_VENDOR", "").strip()
             if prefer_vendor == "1":
                 prefer_str = PREFER_VENDOR
             elif prefer_vendor == "0":
@@ -251,19 +251,19 @@ class PolicyManager:
                 # Default behavior: prefer default (FlagOS)
                 prefer_str = PREFER_DEFAULT
 
-        # TE_FL_STRICT=1 forbids fallback: a failing implementation raises
+        # NVTE_PLUGIN_STRICT=1 forbids fallback: a failing implementation raises
         # instead of the next candidate being tried. This is the only place the
         # variable is read; OpManager.call() derives fallback from the resulting
         # policy so the two cannot disagree.
-        strict = os.environ.get("TE_FL_STRICT", "0").strip() == "1"
+        strict = os.environ.get("NVTE_PLUGIN_STRICT", "0").strip() == "1"
 
-        deny_str = os.environ.get("TE_FL_DENY_VENDORS", "").strip()
+        deny_str = os.environ.get("NVTE_PLUGIN_DENY_VENDORS", "").strip()
         deny_vendors = self._parse_csv_set(deny_str) if deny_str else None
 
-        allow_str = os.environ.get("TE_FL_ALLOW_VENDORS", "").strip()
+        allow_str = os.environ.get("NVTE_PLUGIN_ALLOW_VENDORS", "").strip()
         allow_vendors = self._parse_csv_set(allow_str) if allow_str else None
 
-        per_op_str = os.environ.get("TE_FL_PER_OP", "").strip()
+        per_op_str = os.environ.get("NVTE_PLUGIN_PER_OP", "").strip()
         per_op_order = self._parse_per_op(per_op_str) if per_op_str else None
 
         return SelectionPolicy.from_dict(

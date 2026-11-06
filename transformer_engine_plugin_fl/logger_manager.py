@@ -87,8 +87,8 @@ class LoggerManager:
         if self._global_logger is None:
             with self._lock:
                 if self._global_logger is None:
-                    level = os.getenv("TEFL_LOG_LEVEL", "INFO").upper()
-                    self._global_logger = Logger("TE-FL", level)
+                    level = os.getenv("NVTE_PLUGIN_LOG_LEVEL", "INFO").upper()
+                    self._global_logger = Logger("NVTE-PLUGIN", level)
         return self._global_logger
 
     def print_once(self, message):

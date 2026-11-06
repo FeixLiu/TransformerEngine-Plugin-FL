@@ -11,9 +11,9 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from .logger_manager import get_logger
 
-PLUGIN_GROUP = "te_fl.plugin"
+PLUGIN_GROUP = "nvte.plugin"
 
-PLUGIN_MODULES_ENV = "TE_FL_PLUGIN_MODULES"
+PLUGIN_MODULES_ENV = "NVTE_PLUGIN_MODULES"
 
 logger = get_logger()
 
@@ -79,7 +79,7 @@ def _call_register_function(
             _log_error(f"Error calling plugin {source_name}: {e}")
             return False
 
-    register_fn = getattr(obj, "te_fl_register", None) or getattr(obj, "register", None)
+    register_fn = getattr(obj, "nvte_plugin_register", None) or getattr(obj, "register", None)
 
     if callable(register_fn):
         try:
@@ -160,8 +160,8 @@ def discover_plugin(registry_module: Any) -> int:
     Main plugin discovery function.
 
     Discovers and registers plugin from:
-    1. Entry points (group: 'te_fl.plugin')
-    2. Environment variable modules (TE_FL_PLUGIN_MODULES)
+    1. Entry points (group: 'nvte.plugin')
+    2. Environment variable modules (NVTE_PLUGIN_MODULES)
 
     Args:
         registry_module: OpRegistry instance to register plugin to
