@@ -252,11 +252,8 @@ class OpManager:
             break
 
         if chosen is None:
-            if policy.strict:
-                raise RuntimeError(
-                    f"No implementation available for op='{op_name}' under strict policy. "
-                    f"Candidates: {[c.impl_id for c in candidates]}"
-                )
+            # Not affected by policy.strict: no candidate matches any order
+            # token, so there is nothing to fall back to either way.
             raise RuntimeError(
                 f"No implementation selected for op='{op_name}'. "
                 f"Candidates: {[c.impl_id for c in candidates]}, Order: {order}"
@@ -371,6 +368,12 @@ class OpManager:
         """
         Resolve and call an operator implementation with optional fallback support.
 
+        Strict policy (``TE_FL_STRICT=1``) disables fallback: the selected
+        implementation's exception propagates instead of the next candidate
+        being tried. Fallback is taken from the policy rather than read from the
+        environment here, so that it stays consistent with ``policy.strict`` and
+        honours ``policy_context`` / ``with_strict_mode()`` overrides.
+
         Logs on first call or when the implementation changes.
 
         Args:
@@ -383,7 +386,7 @@ class OpManager:
         Raises:
             RuntimeError: If all implementations fail
         """
-        enable_fallback = os.getenv("TE_FL_STRICT", "1") != "0"
+        enable_fallback = not get_policy().strict
 
         cached_impl = self._impl_cache.get(op_name)
         cache_valid = self._is_cache_valid(op_name)

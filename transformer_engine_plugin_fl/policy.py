@@ -31,7 +31,9 @@ class SelectionPolicy:
             - "flagos": Prefer DEFAULT (FlagOS) implementations
             - "vendor": Prefer VENDOR (CUDA) implementations
             - "reference": Prefer REFERENCE (PyTorch) implementations
-        strict: If True, raise error when primary implementation fails
+        strict: If True, disallow fallback. The selected implementation's
+            exception propagates instead of the next candidate being tried
+            (set by TE_FL_STRICT=1)
         per_op_order: Per-operator custom selection order
         deny_vendors: Set of vendor names to deny
         allow_vendors: Set of vendor names to allow (whitelist)
@@ -249,6 +251,10 @@ class PolicyManager:
                 # Default behavior: prefer default (FlagOS)
                 prefer_str = PREFER_DEFAULT
 
+        # TE_FL_STRICT=1 forbids fallback: a failing implementation raises
+        # instead of the next candidate being tried. This is the only place the
+        # variable is read; OpManager.call() derives fallback from the resulting
+        # policy so the two cannot disagree.
         strict = os.environ.get("TE_FL_STRICT", "0").strip() == "1"
 
         deny_str = os.environ.get("TE_FL_DENY_VENDORS", "").strip()

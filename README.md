@@ -308,25 +308,44 @@ fallback 顺序),这能覆盖接口层;数值正确性仍需在真实卡上验�
 而旧仓的 `common/__init__.py:21-38` `skip_cuda_build()` 只认 `TE_FL_SKIP_CUDA`。
 所以现在改名会直接打断 8 个平台的 CI,必须等下游切到新 fork 时一起改。
 
-**`TE_FL_STRICT` 语义反了(本次未修,先于本次升级存在)**:
-`policy.py` 和 `manager.py` 对同一个变量的默认值和含义不一致 ——
+### 5.2 `TE_FL_STRICT` 语义不一致已修复
 
-| | `policy.py:252` | `manager.py:386,490` |
+**语义确定为:设置了就不允许 fallback。** 原先 `policy.py` 和 `manager.py` 读同一个变量
+却当成两件相反的事,默认值也不同:
+
+| | `policy.py:252` | `manager.py:386`(旧) |
 | --- | --- | --- |
 | 读法 | `get("TE_FL_STRICT", "0") == "1"` | `getenv("TE_FL_STRICT", "1") != "0"` |
 | 含义 | `strict`(严格模式) | `enable_fallback`(开启回退) |
 
-两者语义相反却读同一个变量,实测结果:
+```
+修复前:
+TE_FL_STRICT 未设置 -> policy.strict=False  enable_fallback=True   # 合理
+TE_FL_STRICT=1      -> policy.strict=True   enable_fallback=True   # 要严格,却开着回退
+TE_FL_STRICT=0      -> policy.strict=False  enable_fallback=False  # 不要严格,却关了回退
+```
+
+修复方式:`manager.call()` 不再自己读环境变量,改为 `enable_fallback = not get_policy().strict`。
+`policy.py:252` 成为该变量的**唯一读取点**,两者不可能再分叉。实测:
 
 ```
-TE_FL_STRICT 未设置 -> policy.strict=False  manager.enable_fallback=True   # 合理
-TE_FL_STRICT=1      -> policy.strict=True   manager.enable_fallback=True   # 要严格,却开着回退
-TE_FL_STRICT=0      -> policy.strict=False  manager.enable_fallback=False  # 不要严格,却关了回退
+TE_FL_STRICT 未设置 -> strict=False -> 主实现失败后回退到下一候选
+TE_FL_STRICT=0      -> strict=False -> 同上
+TE_FL_STRICT=1      -> strict=True  -> 主实现的异常直接抛出,不回退
 ```
 
-也就是说 `manager.py` 侧完全反了:`=1` 期望"失败就报错"却仍然回退,`=0` 期望"允许回退"
-反而关掉了回退。修这个会改变运行时行为(影响 FlagScale 现有作业的失败语义),
-所以和 §5 的改名一起处理,顺便把这个变量拆成两个,或者统一成一个方向明确的名字。
+顺带修好的两点:
+
+- **`policy_context()` / `with_strict_mode()` 现在真的能控制 fallback**。旧实现里
+  `call()` 只看环境变量,所以这两个 context manager 对回退行为完全没有影响 ——
+  `with_strict_mode()` 内部依然会回退
+- `resolve()` 里 `chosen is None` 的两个分支原本只有报错信息不同、行为完全一样,
+  而 "under strict policy" 的措辞会让人以为 `strict` 管的是**选择**失败。实际上这里
+  是"没有任何候选匹配 order token",与 `strict` 无关(两种情况都无可回退),
+  因此合并为信息更全的那条
+
+**对下游的影响**:`FlagScale` / `Megatron-LM-FL` 当前没有任何地方设置 `TE_FL_STRICT`
+(已 grep 确认),所以这次修复不改变现有作业的行为。
 
 ## 6. 环境
 
@@ -344,6 +363,6 @@ export NVTE_PLUGIN=transformer_engine_plugin_fl
 | `TE_FL_PREFER` | 优先后端:`flagos` / `vendor` / `reference` |
 | `TE_FL_PER_OP` | 按 op 指定,如 `layernorm_fwd=vendor\|flagos;rmsnorm_fwd=flagos` |
 | `TE_FL_ALLOW_VENDORS` / `TE_FL_DENY_VENDORS` | 厂商白/黑名单(逗号分隔) |
-| `TE_FL_STRICT` | 本意是 `1` 关闭 fallback,**但当前实现有 bug,见 §5** |
+| `TE_FL_STRICT` | `1` 禁止 fallback:主实现失败时直接抛异常,不再尝试下一候选(默认不设 = 允许回退,见 §5.2) |
 
 `TE_FL_PER_OP` 的格式是 `op=后端1|后端2;op2=后端3`,用 `;` 分隔 op、`|` 分隔候选顺序。
