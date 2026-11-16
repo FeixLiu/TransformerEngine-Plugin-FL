@@ -154,6 +154,51 @@ class OpManager:
                 )
                 logger.info(f"Registered impl_ids: {impl_ids}")
 
+            self._warn_on_unknown_policy_names(snap)
+
+    def _warn_on_unknown_policy_names(self, snap) -> None:
+        """Report policy entries that can never match anything.
+
+        Both the per-op table and the vendor filters are plain strings matched
+        exactly, so a typo or the wrong case is not an error -- the entry simply
+        never applies, and the backend silently stays whatever it was. Warn
+        instead of raising: denying a vendor that is absent from this machine is
+        a legitimate way to write one config for several platforms.
+        """
+        policy = get_policy()
+
+        unknown_ops = sorted(set(policy.per_op_order_dict) - set(snap.impls_by_op))
+        if unknown_ops:
+            logger.warning_once(
+                f"NVTE_PLUGIN_PER_OP names ops that are not registered: {unknown_ops}."
+                " These entries are ignored; check the op spelling against the"
+                " dispatch table."
+            )
+
+        known_vendors = {
+            impl.vendor for impls in snap.impls_by_op.values() for impl in impls if impl.vendor
+        }
+        if not known_vendors:
+            return
+
+        configured = set(policy.deny_vendors) | set(policy.allow_vendors or ())
+        unknown_vendors = sorted(configured - known_vendors)
+        if unknown_vendors:
+            # Vendor names are matched case-sensitively, which is the usual cause.
+            hints = {v.upper(): v for v in known_vendors}
+            hints.update({v.lower(): v for v in known_vendors})
+            suggestions = {
+                name: hints[name.upper()] for name in unknown_vendors if name.upper() in hints
+            }
+            message = (
+                f"NVTE_PLUGIN_ALLOW_VENDORS/DENY_VENDORS names unknown vendors:"
+                f" {unknown_vendors}. Registered on this machine:"
+                f" {sorted(known_vendors)} (matching is case-sensitive)."
+            )
+            if suggestions:
+                message += f" Did you mean {suggestions}?"
+            logger.warning_once(message)
+
     def _matches_vendor_filters(self, impl: OpImpl, policy: SelectionPolicy) -> bool:
         """Check if implementation matches policy vendor filters"""
         if impl.kind != BackendImplKind.VENDOR:

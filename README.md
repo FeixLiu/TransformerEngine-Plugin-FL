@@ -289,13 +289,12 @@ fallback 顺序),这能覆盖接口层;数值正确性仍需在真实卡上验�
 `ctypes.CDLL` 全局加载。不设它时,可用性完全由
 `torch.cuda.is_available()` + `import transformer_engine_torch_nv` 探测决定。
 
-**下游待办(本次未动)**:`FlagScale` 和 `Megatron-LM-FL` 里约 45 处 `TE_FL_SKIP_CUDA=1`
-(8 个厂商的 `.github/configs/*.yml`、`tools/install/*/env.sh`、`set_env_*.sh`,
-以及 `prepare_dependencies.yml:167` / `prepare_te_fl.yml:104` 两处 "python-only 构建必须
-`TE_FL_SKIP_CUDA=1`" 的 workflow 门控)。这些目前消费的是**旧仓
-`flagos-ai/TransformerEngine-FL`** —— 两个下游仓共 24 处引用都指向旧仓,零处引用本仓,
-而旧仓的 `common/__init__.py:21-38` `skip_cuda_build()` 只认 `TE_FL_SKIP_CUDA`。
-所以现在改名会直接打断 8 个平台的 CI,必须等下游切到新 fork 时一起改。
+**下游已同步完成(本批次)**:`FlagScale` 和 `Megatron-LM-FL` 里约 45 处 `TE_FL_SKIP_CUDA=1`
+(8 个厂商的 `.github/configs/*.yml`、`tools/install/*/env.sh`、`docker/*/Dockerfile.train`、
+`set_env_*.sh`,以及 `prepare_dependencies.yml` / `prepare_te_fl.yml` 两处 workflow 门控)
+已全部改名为 `NVTE_PLUGIN_SKIP_CUDA`。同时补齐了各平台 build/runtime 环境里缺失的
+`NVTE_PLUGIN=transformer_engine_plugin_fl`(总开关),并修复了
+`build_te_fl_native.sh` 在无 CUDA 机器上会走错误构建路径的问题。
 
 ### 5.2 `TE_FL_STRICT` 语义不一致已修复
 
@@ -372,22 +371,53 @@ TE_FL_STRICT=1      -> strict=True  -> 主实现的异常直接抛出,不回退
 
 注意 `TEFLBackendBase` / `TEFLModule` 是**类名**不是环境变量,本次未动。
 
-**下游待办(本次未改,会静默失效)**:下面这些设的是旧名,新代码已经不读了。
-因为它们当前消费的是旧仓 `flagos-ai/TransformerEngine-FL`(两个下游仓共 24 处 TE 引用
-全部指向旧仓、零处引用本仓),现在改反而会打断旧仓路径,所以留到下游切新 fork 时一起改:
+**下游已同步改完**(`Megatron-LM-FL` 11 文件 / `FlagScale` 32 文件,均在 `te-upgrade` 分支):
 
-| 变量 | 下游位置 |
+| 仓库 | 改动 |
 | --- | --- |
-| `TE_FL_PREFER` | **24 个文件**(FlagScale 13 / Megatron-LM-FL 11):`flagscale/train/megatron/backend_config.py:23`、`tools/install/*/env.sh`、`.github/configs/*.yml`、`.github/scripts/set_env_*.sh` |
-| `TE_FL_PER_OP` | `backend_config.py:24`、`Megatron-LM-FL/.github/configs/metax.yml:332` |
-| `TE_FL_ALLOW_VENDORS` / `TE_FL_DENY_VENDORS` | `backend_config.py:25-26` |
-| `TE_FL_SKIP_CUDA` | 约 45 处,见 §5.1 末尾 |
+| `Megatron-LM-FL` | 22 处 / 16 文件。两个独立面:(a) CI 环境变量 12 处(8 个 `.github/configs/*.yml` + 3 个 `set_env_*.sh`),该仓的变量是不透明透传(`yq` 整块读 `te_fl.runtime.environment` → `ci_apply_env_json`,只校验 key 语法不认具体名字);(b) **`TransformerConfig` 的 `te_fl_prefer` 字段** → `nvte_plugin_prefer`,见下 |
+| `FlagScale` | 51 处 / 32 文件。含 **CLI 参数改名**(见下)、`backend_config.py` 映射表与前缀判断、`arguments.py` 的 checkpoint 参数白名单、13 个 benchmark/example YAML、`tools/install/*`、`docker/ppu/Dockerfile.train`、两份 README |
 
-失效表现是**静默**的:`NVTE_PLUGIN_PREFER` 没设时 policy 回到默认 `flagos` 顺序,
-不报错。所以下游切换时必须同时改名,否则后端选择会悄悄回到默认值。
+`FlagScale` 的 CLI 参数一并统一,**不保留旧名**:
 
-`backend_config.py` 里的 `_BACKEND_ENVIRONMENT_ARGUMENTS` 元组和 `startswith("TE_FL_")`
-判断也要一起改,另见 §5 记的那个 policy reset 死代码。
+| 旧参数 | 新参数 |
+| --- | --- |
+| `--te-fl-prefer` | `--nvte-plugin-prefer` |
+| `--te-fl-per-op` | `--nvte-plugin-per-op` |
+| `--te-fl-allow-vendors` | `--nvte-plugin-allow-vendors` |
+| `--te-fl-deny-vendors` | `--nvte-plugin-deny-vendors` |
+
+对应的 YAML 键(`te_fl_prefer:` → `nvte_plugin_prefer:`)同步改名 —— FlagScale 的 runner
+把 YAML 键按 `_`→`-` 转成命令行参数(`flagscale/runner/utils.py:495`),所以两者必须一致。
+`--mg-fl-prefer` / `MG_FL_PREFER` 是 Megatron 侧的后端选择,不属于本插件,保持原名。
+
+**`Megatron-LM-FL` 的 `TransformerConfig.te_fl_prefer` 字段必须跟着一起改**,否则是个
+静默错误。`megatron/training/argument_utils.py:296-298` 按字段名从 args 取值:
+
+```python
+for f in dataclasses.fields(config_class):
+    if hasattr(args, f.name):            # 名字不匹配 -> 整个跳过,不报错
+        kw_args[f.name] = getattr(args, f.name)
+```
+
+只改 FlagScale 的 args 属性(`te_fl_prefer` → `nvte_plugin_prefer`)而不改这个字段,
+`hasattr` 就恒为 `False`,字段静默回落到默认值 `"vendor"`。实测后果:用户指定
+`prefer=flagos`,但 `megatron/core/tensor_parallel/layers.py:617` 的
+`if not (ctx.nvte_plugin_prefer == 'flagos' or ... == 'reference')` 仍然成立,
+于是走了 `fused_weight_gradient_mlp_cuda` 的融合 wgrad 路径 —— 后端选择被悄悄忽略。
+所以 `transformer_config.py`(core + Ascend plugin)、`tensor_parallel/layers.py`
+(core + kunlunxin plugin)和 `test_mamba_moe_model.py` 共 10 处一并改名。
+FlagScale 自己的 `flagscale/models/megatron/*/transformer_config.py` 继承
+`TransformerConfig`,不单独声明该字段,无需改动。
+
+顺带修掉了 §5 记的那个 **policy reset 死代码**:`backend_config.py` 查的模块路径从
+旧内嵌设计的 `transformer_engine.plugin.core.policy` 改成
+`transformer_engine_plugin_fl.policy`,现在 `reset_global_policy()` 真的能拿到函数了。
+
+`TE_FL_SKIP_CUDA` 也已在下游改为 `NVTE_PLUGIN_SKIP_CUDA`(见 §5.1 末尾)。注意下游 CI 的
+`te_fl.repository` 和 `tools/install/*/install_train.sh` 的 `TE_REPO` 默认值仍指向旧仓
+`flagos-ai/TransformerEngine-FL`,旧仓只认 `TE_FL_SKIP_CUDA`;**必须同时把仓库地址切到
+新 fork 并安装插件包,否则非 CUDA 平台的 python-only 构建会走进 CUDA 编译路径**。
 
 ## 6. 环境
 
