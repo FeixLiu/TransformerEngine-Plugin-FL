@@ -2241,7 +2241,7 @@ class CUDABackend(TEFLBackendBase):
         # ahead of `num_splits`, so positional forwarding would misplace them.
         kwargs = {}
         if comm_type is not None:
-            kwargs["comm_type"] = comm_type
+            kwargs["comm_type"] = tex.CommOverlapType(int(comm_type))
         return tex.CommOverlap(
             buffer_shape,
             buffer_dtype,
@@ -2284,7 +2284,7 @@ class CUDABackend(TEFLBackendBase):
             buffer_dtype,
             helper,
             tp_size,
-            comm_type,
+            tex.CommOverlapType(int(comm_type)),
             num_max_streams,
             comm_cga_size,
             gemm_priority,
